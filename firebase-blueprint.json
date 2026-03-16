@@ -40,9 +40,26 @@
         "userId": { "type": "string", "description": "ID of the user who performed the transaction" }
       },
       "required": ["productId", "type", "quantity", "date", "userId"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Application user with role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "photoURL": { "type": "string", "description": "User photo URL" },
+        "role": { "type": "string", "enum": ["admin", "user", "viewer"], "description": "User role" }
+      },
+      "required": ["uid", "email", "role"]
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection of users and their roles"
+    },
     "/categories/{categoryId}": {
       "schema": "Category",
       "description": "Collection of product categories"

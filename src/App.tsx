@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, createContext, useContext } from 'react';
 import Papa from 'papaparse';
+import Fuse from 'fuse.js';
+import { LineChart, CartesianGrid, XAxis, YAxis, Tooltip, Line, ResponsiveContainer } from 'recharts';
 import { 
   collection, 
   onSnapshot, 
@@ -15,7 +17,8 @@ import {
   writeBatch,
   Timestamp,
   getDoc,
-  getDocFromServer
+  getDocFromServer,
+  setDoc
 } from 'firebase/firestore';
 import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
 import { db, auth, handleFirestoreError, OperationType } from './firebase';
@@ -37,6 +40,7 @@ import {
   TrendingUp,
   TrendingDown,
   Box,
+  BarChart3,
   Trash2,
   Move,
   CheckSquare,
@@ -47,14 +51,19 @@ import {
   Image as ImageIcon,
   Sparkles,
   Upload,
-  Loader2
+  Loader2,
+  Users as UsersIcon
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
 
 // Types
-interface AppUser extends User {
-  role: 'admin' | 'user';
+interface AppUser {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+  role: 'admin' | 'user' | 'viewer';
 }
 
 interface Category {
@@ -74,6 +83,7 @@ interface Product {
   unit?: string;
   imageUrl?: string;
   tags?: string[];
+  batchNumber?: string;
   lastUpdated?: any;
 }
 
@@ -88,24 +98,96 @@ interface Transaction {
   userId: string;
 }
 
-type ThemeColor = 'emerald' | 'blue' | 'rose' | 'amber' | 'violet' | 'indigo';
+const LanguageContext = createContext<{ t: (key: string) => string, language: string }>({ t: (k) => k, language: 'en' });
 
-interface Theme {
-  id: ThemeColor;
-  name: string;
-  primary: string;
-  accent: string;
-  bg: string;
-}
+export const useTranslation = () => useContext(LanguageContext);
 
-const THEMES: Theme[] = [
-  { id: 'emerald', name: 'Emerald', primary: 'bg-emerald-500', accent: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-  { id: 'blue', name: 'Ocean', primary: 'bg-blue-500', accent: 'text-blue-500', bg: 'bg-blue-500/10' },
-  { id: 'rose', name: 'Rose', primary: 'bg-rose-500', accent: 'text-rose-500', bg: 'bg-rose-500/10' },
-  { id: 'amber', name: 'Amber', primary: 'bg-amber-500', accent: 'text-amber-500', bg: 'bg-amber-500/10' },
-  { id: 'violet', name: 'Violet', primary: 'bg-violet-500', accent: 'text-violet-500', bg: 'bg-violet-500/10' },
-  { id: 'indigo', name: 'Indigo', primary: 'bg-indigo-500', accent: 'text-indigo-500', bg: 'bg-indigo-500/10' },
-];
+const translations: Record<string, Record<string, string>> = {
+  en: {
+    dashboard: 'Dashboard',
+    products: 'Products',
+    inventory: 'Inventory',
+    categories: 'Categories',
+    transactions: 'Transactions',
+    reports: 'Reports',
+    settings: 'Settings',
+    language: 'Language',
+    theme: 'Theme',
+    brightness: 'Brightness',
+    signOut: 'Sign Out',
+    overview: 'Overview of your inventory status',
+    lastUpdated: 'Last Updated',
+    totalProducts: 'Total Products',
+    lowStock: 'Low Stock Items',
+    totalValue: 'Total Value',
+    recentActivity: 'Recent Activity',
+    viewAll: 'View All',
+    noRecentActivity: 'No recent activity',
+    lowStockAlerts: 'Low Stock Alerts',
+    viewInventory: 'View Inventory',
+    allStockLevelsGood: 'All stock levels are good',
+    lowStockWarning: 'Low Stock Warning',
+    lowStockWarningDesc: 'There are {count} items currently below their minimum stock level.',
+    reviewInventory: 'Review Inventory',
+    totalItems: 'Total Items',
+    recentMoves: 'Recent Moves',
+    attentionRequired: 'Attention Required',
+    allStockLevelsHealthy: 'All stock levels are healthy',
+    recentTransactions: 'Recent Transactions',
+    inventoryDesc: 'Manage your products and stock levels',
+    categoriesDesc: 'Organize your inventory by type',
+    reportsDesc: 'Inventory and sales performance insights',
+    transactionsDesc: 'Historical record of all stock movements',
+    addProduct: 'Add Product',
+    exportCSV: 'Export CSV',
+    importCSV: 'Import CSV',
+    bulkMove: 'Bulk Move',
+    deleteSelected: 'Delete Selected',
+    newCategory: 'New Category'
+  },
+  km: {
+    dashboard: 'ផ្ទាំងគ្រប់គ្រង',
+    products: 'ផលិតផល',
+    inventory: 'ស្តុក',
+    categories: 'ប្រភេទ',
+    transactions: 'ប្រតិបត្តិការ',
+    reports: 'របាយការណ៍',
+    settings: 'ការកំណត់',
+    language: 'ភាសា',
+    theme: 'រូបរាង',
+    brightness: 'ពន្លឺ',
+    signOut: 'ចាកចេញ',
+    overview: 'ទិដ្ឋភាពទូទៅនៃស្ថានភាពស្តុករបស់អ្នក',
+    lastUpdated: 'បានធ្វើបច្ចុប្បន្នភាពចុងក្រោយ',
+    totalProducts: 'ផលិតផលសរុប',
+    lowStock: 'ទំនិញស្តុកទាប',
+    totalValue: 'តម្លៃសរុប',
+    recentActivity: 'សកម្មភាពថ្មីៗ',
+    viewAll: 'មើលទាំងអស់',
+    noRecentActivity: 'គ្មានសកម្មភាពថ្មីៗទេ',
+    lowStockAlerts: 'ការព្រមានស្តុកទាប',
+    viewInventory: 'មើលស្តុក',
+    allStockLevelsGood: 'កម្រិតស្តុកទាំងអស់ល្អ',
+    lowStockWarning: 'ការព្រមានស្តុកទាប',
+    lowStockWarningDesc: 'បច្ចុប្បន្នមានទំនិញ {count} ក្រោមវាកម្រិតស្តុកអប្បបរមា។',
+    reviewInventory: 'ពិនិត្យស្តុក',
+    totalItems: 'ទំនិញសរុប',
+    recentMoves: 'ចលនាថ្មីៗ',
+    attentionRequired: 'ត្រូវការការយកចិត្តទុកដាក់',
+    allStockLevelsHealthy: 'កម្រិតស្តុកទាំងអស់មានសុខភាពល្អ',
+    recentTransactions: 'ប្រតិបត្តិការថ្មីៗ',
+    inventoryDesc: 'គ្រប់គ្រងផលិតផល និងកម្រិតស្តុករបស់អ្នក',
+    categoriesDesc: 'រៀបចំស្តុករបស់អ្នកតាមប្រភេទ',
+    reportsDesc: 'ការយល់ដឹងអំពីដំណើរការស្តុកនិងការលក់',
+    transactionsDesc: 'កំណត់ត្រាប្រវត្តិសាស្រ្តនៃចលនាស្តុកទាំងអស់',
+    addProduct: 'បន្ថែមផលិតផល',
+    exportCSV: 'នាំចេញ CSV',
+    importCSV: 'នាំចូល CSV',
+    bulkMove: 'ផ្លាស់ទីច្រើន',
+    deleteSelected: 'លុបដែលបានជ្រើសរើស',
+    newCategory: 'ប្រភេទថ្មី'
+  }
+};
 
 // Components
 interface SidebarProps {
@@ -114,8 +196,13 @@ interface SidebarProps {
   user: AppUser | null;
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
-  currentTheme: ThemeColor;
-  setTheme: (theme: ThemeColor) => void;
+  language: 'en' | 'km';
+  setLanguage: (lang: 'en' | 'km') => void;
+  themeMode: 'light' | 'dark' | 'gray';
+  setThemeMode: (mode: 'light' | 'dark' | 'gray') => void;
+  brightness: number;
+  setBrightness: (b: number) => void;
+  t: (key: string) => string;
 }
 
 const Sidebar = ({ 
@@ -124,15 +211,22 @@ const Sidebar = ({
   user, 
   isOpen, 
   setIsOpen,
-  currentTheme,
-  setTheme
+  language,
+  setLanguage,
+  themeMode,
+  setThemeMode,
+  brightness,
+  setBrightness,
+  t
 }: SidebarProps) => {
   const menuItems: { id: string, label: string, icon: any, adminOnly?: boolean }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'products', label: 'Products', icon: Box },
-    { id: 'inventory', label: 'Inventory', icon: Package },
-    { id: 'categories', label: 'Categories', icon: Tags },
-    { id: 'transactions', label: 'Transactions', icon: History, adminOnly: true },
+    { id: 'dashboard', label: t('dashboard'), icon: LayoutDashboard },
+    { id: 'products', label: t('products'), icon: Box },
+    { id: 'inventory', label: t('inventory'), icon: Package },
+    { id: 'categories', label: t('categories'), icon: Tags },
+    { id: 'transactions', label: t('transactions'), icon: History },
+    { id: 'reports', label: t('reports'), icon: BarChart3, adminOnly: true },
+    { id: 'users', label: t('users') || 'Users', icon: UsersIcon, adminOnly: true },
   ].filter(item => !item.adminOnly || user?.role === 'admin');
 
   return (
@@ -197,21 +291,36 @@ const Sidebar = ({
           </div>
 
           <div className="px-4 mt-8">
-            <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-4">Theme Customization</p>
-            <div className="grid grid-cols-3 gap-2">
-              {THEMES.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setTheme(t.id)}
-                  title={t.name}
-                  className={`
-                    h-10 rounded-lg border-2 transition-all flex items-center justify-center
-                    ${currentTheme === t.id ? 'border-primary bg-primary/10' : 'border-zinc-800 hover:border-zinc-700'}
-                  `}
-                >
-                  <div className={`w-4 h-4 rounded-full ${t.primary}`} />
+            <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-4">Settings</p>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm">{t('language')}</span>
+                <button onClick={() => setLanguage(language === 'en' ? 'km' : 'en')} className="text-xs bg-zinc-800 px-2 py-1 rounded">
+                  {language.toUpperCase()}
                 </button>
-              ))}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm">{t('theme')}</span>
+                <select value={themeMode} onChange={(e) => setThemeMode(e.target.value as any)} className="text-xs bg-zinc-800 px-2 py-1 rounded">
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                  <option value="gray">Gray</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm">{t('brightness')}</span>
+                  <span className="text-xs text-zinc-400">{brightness}%</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="1" 
+                  max="100" 
+                  value={brightness} 
+                  onChange={(e) => setBrightness(Number(e.target.value))}
+                  className="w-full accent-[var(--color-primary)]"
+                />
+              </div>
             </div>
           </div>
         </nav>
@@ -231,7 +340,7 @@ const Sidebar = ({
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-500/10 hover:text-red-400 transition-colors"
           >
             <LogOut size={20} />
-            <span className="font-medium">Sign Out</span>
+            <span className="font-medium">{t('signOut')}</span>
           </button>
         </div>
       </div>
@@ -239,7 +348,8 @@ const Sidebar = ({
   );
 };
 
-const Dashboard = ({ products, transactions }: { products: Product[], transactions: Transaction[] }) => {
+const Dashboard = ({ products, transactions, setActiveTab }: { products: Product[], transactions: Transaction[], setActiveTab: (tab: string) => void }) => {
+  const { t } = useTranslation();
   const totalProducts = products.length;
   const lowStockProducts = products.filter(p => p.quantity <= (p.minStockLevel || 0));
   const totalStockValue = products.reduce((acc, p) => acc + (p.price * p.quantity), 0);
@@ -250,11 +360,11 @@ const Dashboard = ({ products, transactions }: { products: Product[], transactio
     <div className="space-y-8">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-white tracking-tight">Dashboard</h2>
-          <p className="text-zinc-500 mt-1 italic font-serif">Overview of your inventory status</p>
+          <h2 className="text-3xl font-bold text-white tracking-tight">{t('dashboard')}</h2>
+          <p className="text-zinc-500 mt-1 italic font-serif">{t('overview')}</p>
         </div>
         <div className="md:text-right">
-          <p className="text-xs uppercase tracking-widest text-zinc-500 font-mono">Last Updated</p>
+          <p className="text-xs uppercase tracking-widest text-zinc-500 font-mono">{t('lastUpdated')}</p>
           <p className="text-sm text-zinc-300 font-mono">{new Date().toLocaleTimeString()}</p>
         </div>
       </div>
@@ -269,8 +379,8 @@ const Dashboard = ({ products, transactions }: { products: Product[], transactio
             <AlertTriangle size={20} />
           </div>
           <div className="flex-1">
-            <h4 className="text-amber-500 font-bold">Low Stock Warning</h4>
-            <p className="text-zinc-400 text-sm">There are {lowStockProducts.length} items currently below their minimum stock level.</p>
+            <h4 className="text-amber-500 font-bold">{t('lowStockWarning')}</h4>
+            <p className="text-zinc-400 text-sm">{t('lowStockWarningDesc').replace('{count}', lowStockProducts.length.toString())}</p>
           </div>
           <button 
             onClick={() => {
@@ -280,17 +390,17 @@ const Dashboard = ({ products, transactions }: { products: Product[], transactio
             }}
             className="hidden sm:block text-xs font-bold uppercase tracking-widest text-amber-500 hover:text-amber-400 transition-colors"
           >
-            Review Inventory
+            {t('reviewInventory')}
           </button>
         </motion.div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {[
-          { label: 'Total Items', value: totalProducts, icon: Box, color: 'text-blue-400' },
-          { label: 'Low Stock', value: lowStockProducts.length, icon: AlertTriangle, color: lowStockProducts.length > 0 ? 'text-amber-400' : 'text-zinc-500' },
-          { label: 'Total Value', value: `$${totalStockValue.toLocaleString()}`, icon: TrendingUp, color: 'text-primary' },
-          { label: 'Recent Moves', value: transactions.length, icon: History, color: 'text-purple-400' },
+          { label: t('totalItems'), value: totalProducts, icon: Box, color: 'text-blue-400' },
+          { label: t('lowStock'), value: lowStockProducts.length, icon: AlertTriangle, color: lowStockProducts.length > 0 ? 'text-amber-400' : 'text-zinc-500' },
+          { label: t('totalValue'), value: `$${totalStockValue.toLocaleString()}`, icon: TrendingUp, color: 'text-primary' },
+          { label: t('recentMoves'), value: transactions.length, icon: History, color: 'text-purple-400' },
         ].map((stat, i) => (
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
@@ -313,8 +423,8 @@ const Dashboard = ({ products, transactions }: { products: Product[], transactio
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
           <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
-            <h3 className="text-lg font-bold text-white">Low Stock Alerts</h3>
-            <span className="px-2 py-1 bg-amber-500/10 text-amber-500 text-xs font-bold rounded-md uppercase tracking-wider">Attention Required</span>
+            <h3 className="text-lg font-bold text-white">{t('lowStockAlerts')}</h3>
+            <span className="px-2 py-1 bg-amber-500/10 text-amber-500 text-xs font-bold rounded-md uppercase tracking-wider">{t('attentionRequired')}</span>
           </div>
           <div className="divide-y divide-zinc-800">
             {lowStockProducts.length > 0 ? (
@@ -339,7 +449,7 @@ const Dashboard = ({ products, transactions }: { products: Product[], transactio
               ))
             ) : (
               <div className="p-12 text-center text-zinc-500 italic font-serif">
-                All stock levels are healthy
+                {t('allStockLevelsHealthy')}
               </div>
             )}
           </div>
@@ -347,8 +457,8 @@ const Dashboard = ({ products, transactions }: { products: Product[], transactio
 
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
           <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
-            <h3 className="text-lg font-bold text-white">Recent Transactions</h3>
-            <button className="text-xs text-emerald-500 hover:text-emerald-400 font-bold uppercase tracking-wider">View All</button>
+            <h3 className="text-lg font-bold text-white">{t('recentTransactions')}</h3>
+            <button onClick={() => setActiveTab('transactions')} className="text-xs text-emerald-500 hover:text-emerald-400 font-bold uppercase tracking-wider">{t('viewAll')}</button>
           </div>
           <div className="divide-y divide-zinc-800">
             {recentTransactions.length > 0 ? (
@@ -382,7 +492,7 @@ const Dashboard = ({ products, transactions }: { products: Product[], transactio
               })
             ) : (
               <div className="p-12 text-center text-zinc-500 italic font-serif">
-                No recent activity
+                {t('noRecentActivity')}
               </div>
             )}
           </div>
@@ -393,12 +503,14 @@ const Dashboard = ({ products, transactions }: { products: Product[], transactio
 };
 
 const Inventory = ({ products, categories, transactions, user }: { products: Product[], categories: Category[], transactions: Transaction[], user: AppUser | null }) => {
+  const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
   const [isBulkMoveModalOpen, setIsBulkMoveModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortConfig, setSortConfig] = useState<{ key: keyof Product | null, direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [targetCategoryId, setTargetCategoryId] = useState('');
   const [isColumnMenuOpen, setIsColumnMenuOpen] = useState(false);
@@ -425,7 +537,8 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
     minStockLevel: 0,
     unit: 'pcs',
     imageUrl: '',
-    tags: []
+    tags: [],
+    batchNumber: ''
   });
 
   const [isGenerating, setIsGenerating] = useState(false);
@@ -488,23 +601,45 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
     notes: ''
   });
 
-  const filteredProducts = products.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          p.sku.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = categoryFilter === '' || p.categoryId === categoryFilter;
-    const matchesTag = tagFilter === '' || (p.tags && p.tags.includes(tagFilter));
-    const matchesStock = stockFilter === 'all' || 
-                         (stockFilter === 'in-stock' && p.quantity > (p.minStockLevel || 0)) ||
-                         (stockFilter === 'below-min' && p.quantity <= (p.minStockLevel || 0));
-    const matchesPrice = p.price >= priceRange.min && p.price <= priceRange.max;
-    return matchesSearch && matchesCategory && matchesTag && matchesStock && matchesPrice;
+  const fuse = useMemo(() => new Fuse(products, {
+    keys: ['name', 'sku', 'tags'],
+    threshold: 0.3,
+  }), [products]);
+
+  const filteredProducts = useMemo(() => {
+    let result = products;
+    if (searchTerm) {
+      result = fuse.search(searchTerm).map(r => r.item);
+    }
+    
+    return result.filter(p => {
+      const matchesCategory = categoryFilter === '' || p.categoryId === categoryFilter;
+      const matchesTag = tagFilter === '' || (p.tags && p.tags.includes(tagFilter));
+      const matchesStock = stockFilter === 'all' || 
+                           (stockFilter === 'in-stock' && p.quantity > (p.minStockLevel || 0)) ||
+                           (stockFilter === 'below-min' && p.quantity <= (p.minStockLevel || 0));
+      const matchesPrice = p.price >= priceRange.min && p.price <= priceRange.max;
+      return matchesCategory && matchesTag && matchesStock && matchesPrice;
+    });
+  }, [products, searchTerm, categoryFilter, tagFilter, stockFilter, priceRange, fuse]);
+
+  const sortedProducts = [...filteredProducts].sort((a, b) => {
+    if (!sortConfig.key) return 0;
+    const aValue = a[sortConfig.key];
+    const bValue = b[sortConfig.key];
+    
+    if (aValue === undefined || bValue === undefined) return 0;
+    
+    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+    return 0;
   });
 
   const toggleSelectAll = () => {
-    if (selectedIds.length === filteredProducts.length) {
+    if (selectedIds.length === sortedProducts.length) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(filteredProducts.map(p => p.id));
+      setSelectedIds(sortedProducts.map(p => p.id));
     }
   };
 
@@ -575,7 +710,7 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
       }
       setIsModalOpen(false);
       setSelectedProduct(null);
-      setFormData({ name: '', categoryId: '', sku: '', price: 0, quantity: 0, minStockLevel: 0, unit: 'pcs', imageUrl: '' });
+      setFormData({ name: '', categoryId: '', sku: '', price: 0, quantity: 0, minStockLevel: 0, unit: 'pcs', imageUrl: '', tags: [], batchNumber: '' });
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'products');
     }
@@ -678,8 +813,8 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-white tracking-tight">Inventory</h2>
-          <p className="text-zinc-500 mt-1 italic font-serif">Manage your products and stock levels</p>
+          <h2 className="text-3xl font-bold text-white tracking-tight">{t('inventory')}</h2>
+          <p className="text-zinc-500 mt-1 italic font-serif">{t('inventoryDesc')}</p>
         </div>
         {user?.role === 'admin' && (
           <>
@@ -692,21 +827,21 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
               className="bg-primary hover:bg-primary-hover text-zinc-950 font-bold px-6 py-3 rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg shadow-primary-shadow"
             >
               <Plus size={20} />
-              Add Product
+              {t('addProduct')}
             </button>
             <button 
               onClick={handleExportCSV}
               className="bg-zinc-800 hover:bg-zinc-700 text-white font-bold px-6 py-3 rounded-xl flex items-center justify-center gap-2 transition-all"
             >
               <Upload size={20} />
-              Export CSV
+              {t('exportCSV')}
             </button>
             <button 
               onClick={() => fileInputRef.current?.click()}
               className="bg-zinc-800 hover:bg-zinc-700 text-white font-bold px-6 py-3 rounded-xl flex items-center justify-center gap-2 transition-all"
             >
               <Plus size={20} />
-              Import CSV
+              {t('importCSV')}
             </button>
             <input type="file" ref={fileInputRef} onChange={handleImportCSV} className="hidden" accept=".csv" />
           </>
@@ -847,14 +982,14 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
                   className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-primary/20 text-primary hover:bg-primary/30 rounded-lg transition-all text-sm font-bold"
                 >
                   <Move size={16} />
-                  Move
+                  {t('bulkMove')}
                 </button>
                 <button 
                   onClick={handleBulkDelete}
                   className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-all text-sm font-bold"
                 >
                   <Trash2 size={16} />
-                  Delete
+                  {t('deleteSelected')}
                 </button>
               </div>
             )}
@@ -879,16 +1014,16 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
                     )}
                   </button>
                 </th>
-                {visibleColumns.product && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">Product</th>}
+                {visibleColumns.product && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest cursor-pointer hover:text-primary" onClick={() => setSortConfig({ key: 'name', direction: sortConfig.key === 'name' && sortConfig.direction === 'asc' ? 'desc' : 'asc' })}>Product</th>}
                 {visibleColumns.category && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">Category</th>}
                 {visibleColumns.sku && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">SKU</th>}
-                {visibleColumns.price && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">Price</th>}
-                {visibleColumns.stock && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">Stock</th>}
+                {visibleColumns.price && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest cursor-pointer hover:text-primary" onClick={() => setSortConfig({ key: 'price', direction: sortConfig.key === 'price' && sortConfig.direction === 'asc' ? 'desc' : 'asc' })}>Price</th>}
+                {visibleColumns.stock && <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest cursor-pointer hover:text-primary" onClick={() => setSortConfig({ key: 'quantity', direction: sortConfig.key === 'quantity' && sortConfig.direction === 'asc' ? 'desc' : 'asc' })}>Stock</th>}
                 <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800">
-              {filteredProducts.map(product => (
+              {sortedProducts.map(product => (
                 <tr 
                   key={product.id} 
                   onClick={() => handleRowClick(product)}
@@ -958,18 +1093,20 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
                   )}
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedProduct(product);
-                          setTxData({ type: 'IN', quantity: 0, notes: '' });
-                          setIsTxModalOpen(true);
-                        }}
-                        className="p-2 hover:bg-primary/10 text-primary rounded-lg transition-colors"
-                        title="Stock In/Out"
-                      >
-                        <ArrowUpRight size={18} />
-                      </button>
+                      {(user?.role === 'admin' || user?.role === 'user') && (
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedProduct(product);
+                            setTxData({ type: 'IN', quantity: 0, notes: '' });
+                            setIsTxModalOpen(true);
+                          }}
+                          className="p-2 hover:bg-primary/10 text-primary rounded-lg transition-colors"
+                          title="Stock In/Out"
+                        >
+                          <ArrowUpRight size={18} />
+                        </button>
+                      )}
                       {user?.role === 'admin' && (
                         <>
                           <button 
@@ -1106,6 +1243,15 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
                       type="text" 
                       value={formData.sku}
                       onChange={(e) => setFormData({...formData, sku: e.target.value})}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2">Batch Number</label>
+                    <input 
+                      type="text" 
+                      value={formData.batchNumber}
+                      onChange={(e) => setFormData({...formData, batchNumber: e.target.value})}
                       className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                     />
                   </div>
@@ -1409,7 +1555,8 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
   );
 };
 
-const Categories = ({ categories }: { categories: Category[] }) => {
+const Categories = ({ categories, user }: { categories: Category[], user: AppUser | null }) => {
+  const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState({ name: '', description: '' });
 
@@ -1428,16 +1575,18 @@ const Categories = ({ categories }: { categories: Category[] }) => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-bold text-white tracking-tight">Categories</h2>
-          <p className="text-zinc-500 mt-1 italic font-serif">Organize your inventory by type</p>
+          <h2 className="text-3xl font-bold text-white tracking-tight">{t('categories')}</h2>
+          <p className="text-zinc-500 mt-1 italic font-serif">{t('categoriesDesc')}</p>
         </div>
-        <button 
-          onClick={() => setIsModalOpen(true)}
-          className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold px-6 py-3 rounded-xl flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
-        >
-          <Plus size={20} />
-          New Category
-        </button>
+        {user?.role === 'admin' && (
+          <button 
+            onClick={() => setIsModalOpen(true)}
+            className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold px-6 py-3 rounded-xl flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
+          >
+            <Plus size={20} />
+            {t('newCategory')}
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1511,12 +1660,79 @@ const Categories = ({ categories }: { categories: Category[] }) => {
   );
 };
 
+const Reports = ({ products, transactions }: { products: Product[], transactions: Transaction[] }) => {
+  const { t } = useTranslation();
+  const [timeRange, setTimeRange] = useState(30);
+
+  const filteredTransactions = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - timeRange);
+    return transactions.filter(tx => tx.date.toDate() >= cutoff);
+  }, [transactions, timeRange]);
+
+  const salesData = useMemo(() => {
+    const salesByDate: { [key: string]: number } = {};
+    filteredTransactions.filter(tx => tx.type === 'OUT').forEach(tx => {
+      const date = tx.date.toDate().toISOString().split('T')[0];
+      const product = products.find(p => p.id === tx.productId);
+      const amount = (product?.price || 0) * tx.quantity;
+      salesByDate[date] = (salesByDate[date] || 0) + amount;
+    });
+    return Object.keys(salesByDate).sort().map(date => ({ date, sales: salesByDate[date] }));
+  }, [filteredTransactions, products]);
+
+  const totalSales = salesData.reduce((sum, d) => sum + d.sales, 0);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold text-white tracking-tight">{t('reports')}</h2>
+          <p className="text-zinc-500 mt-1 italic font-serif">{t('reportsDesc')}</p>
+        </div>
+        <select 
+          value={timeRange} 
+          onChange={(e) => setTimeRange(Number(e.target.value))}
+          className="bg-zinc-900 border border-zinc-800 text-white rounded-xl py-2 px-4 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+        >
+          <option value={7}>Last 7 Days</option>
+          <option value={30}>Last 30 Days</option>
+          <option value={90}>Last 90 Days</option>
+        </select>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl">
+          <h3 className="text-zinc-500 text-sm font-bold uppercase tracking-widest mb-2">Total Sales</h3>
+          <p className="text-4xl font-bold text-white">${totalSales.toFixed(2)}</p>
+        </div>
+      </div>
+
+      <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl">
+        <h3 className="text-xl font-bold text-white mb-6">Sales Performance</h3>
+        <div className="h-80">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={salesData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+              <XAxis dataKey="date" stroke="#71717a" />
+              <YAxis stroke="#71717a" />
+              <Tooltip contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff' }} />
+              <Line type="monotone" dataKey="sales" stroke="#10b981" strokeWidth={2} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Transactions = ({ transactions, products }: { transactions: Transaction[], products: Product[] }) => {
+  const { t } = useTranslation();
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold text-white tracking-tight">Transactions</h2>
-        <p className="text-zinc-500 mt-1 italic font-serif">Historical record of all stock movements</p>
+        <h2 className="text-3xl font-bold text-white tracking-tight">{t('transactions')}</h2>
+        <p className="text-zinc-500 mt-1 italic font-serif">{t('transactionsDesc')}</p>
       </div>
 
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
@@ -1577,23 +1793,90 @@ const Transactions = ({ transactions, products }: { transactions: Transaction[],
   );
 };
 
+const Users = ({ users, onUpdateRole }: { users: AppUser[], onUpdateRole: (uid: string, role: string) => void }) => {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-3xl font-bold text-white tracking-tight">{t('users') || 'Users'}</h2>
+        <p className="text-zinc-500 mt-1 italic font-serif">{t('usersDesc') || 'Manage user roles and permissions'}</p>
+      </div>
+
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-zinc-950/50 border-b border-zinc-800">
+                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">User</th>
+                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">Email</th>
+                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest">Role</th>
+                <th className="px-6 py-4 text-xs font-bold text-zinc-500 uppercase tracking-widest text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800">
+              {users.map(u => (
+                <tr key={u.uid} className="hover:bg-zinc-800/50 transition-colors">
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      {u.photoURL ? (
+                        <img src={u.photoURL} alt={u.displayName || 'User'} className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-400 font-bold">
+                          {(u.displayName || u.email || '?').charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <span className="text-white font-medium">{u.displayName || 'Unknown User'}</span>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-zinc-400">{u.email}</td>
+                  <td className="px-6 py-4">
+                    <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                      u.role === 'admin' ? 'bg-primary/20 text-primary' : 
+                      u.role === 'user' ? 'bg-blue-500/20 text-blue-400' : 
+                      'bg-zinc-800 text-zinc-400'
+                    }`}>
+                      {u.role}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <select 
+                      value={u.role} 
+                      onChange={(e) => onUpdateRole(u.uid, e.target.value)}
+                      disabled={u.email === 'thou.cyber@gmail.com'}
+                      className="bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <option value="viewer">Viewer</option>
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [language, setLanguage] = useState<'en' | 'km'>('en');
+  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'gray'>('dark');
+  const [brightness, setBrightness] = useState(100);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [theme, setTheme] = useState<ThemeColor>(() => {
-    return (localStorage.getItem('stockmaster-theme') as ThemeColor) || 'emerald';
-  });
   
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [users, setUsers] = useState<AppUser[]>([]);
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('stockmaster-theme', theme);
-  }, [theme]);
+    document.documentElement.setAttribute('data-theme-mode', themeMode);
+  }, [themeMode]);
 
   useEffect(() => {
     const testConnection = async () => {
@@ -1609,9 +1892,29 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       if (u) {
-        const userDoc = await getDoc(doc(db, 'users', u.uid));
-        const role = userDoc.exists() ? userDoc.data().role : 'user';
-        setUser({ ...u, role } as AppUser);
+        try {
+          const userRef = doc(db, 'users', u.uid);
+          const userDoc = await getDoc(userRef);
+          let role = 'viewer';
+          
+          if (userDoc.exists()) {
+            role = userDoc.data().role;
+          } else {
+            if (u.email === 'thou.cyber@gmail.com' && u.emailVerified) {
+              role = 'admin';
+            }
+            await setDoc(userRef, {
+              uid: u.uid,
+              email: u.email || '',
+              displayName: u.displayName || '',
+              photoURL: u.photoURL || '',
+              role: role
+            });
+          }
+          setUser({ ...u, role } as AppUser);
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, 'users');
+        }
       } else {
         setUser(null);
       }
@@ -1639,10 +1942,18 @@ export default function App() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'transactions')
     );
 
+    let unsubUsers = () => {};
+    if (user.role === 'admin') {
+      unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+        setUsers(snapshot.docs.map(doc => doc.data() as AppUser));
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'users'));
+    }
+
     return () => {
       unsubProducts();
       unsubCategories();
       unsubTransactions();
+      unsubUsers();
     };
   }, [user]);
 
@@ -1652,6 +1963,14 @@ export default function App() {
       await signInWithPopup(auth, provider);
     } catch (error) {
       console.error(error);
+    }
+  };
+
+  const handleUpdateRole = async (uid: string, newRole: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { role: newRole });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users');
     }
   };
 
@@ -1671,7 +1990,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-6" data-theme={theme}>
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-6">
         <div className="max-w-md w-full space-y-8 text-center">
           <motion.div 
             initial={{ scale: 0.8, opacity: 0 }}
@@ -1697,49 +2016,60 @@ export default function App() {
     );
   }
 
-  return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-300" data-theme={theme}>
-      <Sidebar 
-        activeTab={activeTab} 
-        setActiveTab={setActiveTab} 
-        user={user} 
-        isOpen={isSidebarOpen}
-        setIsOpen={setIsSidebarOpen}
-        currentTheme={theme}
-        setTheme={setTheme}
-      />
-      
-      <div className="lg:ml-64 min-h-screen flex flex-col">
-        {/* Mobile Header */}
-        <header className="lg:hidden bg-zinc-950 border-b border-zinc-800 p-4 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-zinc-950">
-              <Box size={20} />
-            </div>
-            <h1 className="text-white font-bold text-lg tracking-tight">StockMaster</h1>
-          </div>
-          <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-zinc-400 hover:text-white">
-            <Menu size={24} />
-          </button>
-        </header>
+  const t = (key: string) => translations[language]?.[key] || key;
 
-        <main className="p-4 md:p-10 max-w-7xl w-full mx-auto flex-1">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-            >
-              {activeTab === 'dashboard' && <Dashboard products={products} transactions={enrichedTransactions} />}
-              {activeTab === 'inventory' && <Inventory products={products} categories={categories} transactions={enrichedTransactions} user={user} />}
-              {activeTab === 'categories' && <Categories categories={categories} />}
-              {activeTab === 'transactions' && <Transactions transactions={enrichedTransactions} products={products} />}
-            </motion.div>
-          </AnimatePresence>
-        </main>
+  return (
+    <LanguageContext.Provider value={{ t, language }}>
+      <div className={`min-h-screen ${themeMode === 'light' ? 'bg-zinc-100 text-zinc-900' : themeMode === 'gray' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-300'}`} style={{ filter: `brightness(${brightness}%)` }}>
+        <Sidebar 
+          activeTab={activeTab} 
+          setActiveTab={setActiveTab} 
+          user={user} 
+          isOpen={isSidebarOpen}
+          setIsOpen={setIsSidebarOpen}
+          language={language}
+          setLanguage={setLanguage}
+          themeMode={themeMode}
+          setThemeMode={setThemeMode}
+          brightness={brightness}
+          setBrightness={setBrightness}
+          t={t}
+        />
+        
+        <div className="lg:ml-64 min-h-screen flex flex-col">
+          {/* Mobile Header */}
+          <header className="lg:hidden bg-zinc-950 border-b border-zinc-800 p-4 flex items-center justify-between sticky top-0 z-30">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-zinc-950">
+                <Box size={20} />
+              </div>
+              <h1 className="text-white font-bold text-lg tracking-tight">StockMaster</h1>
+            </div>
+            <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-zinc-400 hover:text-white">
+              <Menu size={24} />
+            </button>
+          </header>
+
+          <main className="p-4 md:p-10 max-w-7xl w-full mx-auto flex-1">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+              >
+                {activeTab === 'dashboard' && <Dashboard products={products} transactions={enrichedTransactions} setActiveTab={setActiveTab} />}
+                {activeTab === 'inventory' && <Inventory products={products} categories={categories} transactions={enrichedTransactions} user={user} />}
+                {activeTab === 'categories' && <Categories categories={categories} user={user} />}
+                {activeTab === 'transactions' && <Transactions transactions={enrichedTransactions} products={products} />}
+                {activeTab === 'reports' && user?.role === 'admin' && <Reports products={products} transactions={enrichedTransactions} />}
+                {activeTab === 'users' && user?.role === 'admin' && <Users users={users} onUpdateRole={handleUpdateRole} />}
+              </motion.div>
+            </AnimatePresence>
+          </main>
+        </div>
       </div>
-    </div>
+    </LanguageContext.Provider>
   );
 }
