@@ -506,6 +506,7 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
   const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
+  const [isConfirmTxOpen, setIsConfirmTxOpen] = useState(false);
   const [isBulkMoveModalOpen, setIsBulkMoveModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -774,8 +775,7 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
     });
   };
 
-  const handleTransaction = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleTransaction = async () => {
     if (!selectedProduct) return;
 
     try {
@@ -802,11 +802,17 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
         lastUpdated: Timestamp.now()
       });
 
+      setIsConfirmTxOpen(false);
       setIsTxModalOpen(false);
       setTxData({ type: 'IN', quantity: 0, notes: '' });
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'transactions');
     }
+  };
+
+  const handleTransactionSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsConfirmTxOpen(true);
   };
 
   return (
@@ -1497,7 +1503,7 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
                   <X size={24} />
                 </button>
               </div>
-              <form onSubmit={handleTransaction} className="p-6 space-y-6">
+              <form onSubmit={handleTransactionSubmit} className="p-6 space-y-6">
                 <div className="flex bg-zinc-950 p-1 rounded-xl border border-zinc-800">
                   <button 
                     type="button"
@@ -1544,12 +1550,49 @@ const Inventory = ({ products, categories, transactions, user }: { products: Pro
                       : 'bg-red-500 hover:bg-red-400 text-white shadow-red-500/20'
                   }`}
                 >
-                  Confirm Movement
+                  {txData.type === 'IN' ? 'Stock In' : 'Stock Out'}
                 </button>
               </form>
             </motion.div>
           </div>
         )}
+
+        <AnimatePresence>
+          {isConfirmTxOpen && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-zinc-900 border border-zinc-800 w-full max-w-sm rounded-2xl p-6 shadow-2xl space-y-6"
+              >
+                <div className="text-center space-y-2">
+                  <div className={`w-12 h-12 rounded-full mx-auto flex items-center justify-center ${txData.type === 'IN' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-red-500/20 text-red-500'}`}>
+                    <AlertTriangle size={24} />
+                  </div>
+                  <h3 className="text-lg font-bold text-white">Confirm Transaction</h3>
+                  <p className="text-sm text-zinc-400">
+                    Are you sure you want to perform a <span className="font-bold text-white">{txData.type}</span> movement of <span className="font-bold text-white">{txData.quantity} {selectedProduct?.unit || 'pcs'}</span> for <span className="font-bold text-white">{selectedProduct?.name}</span>?
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setIsConfirmTxOpen(false)}
+                    className="flex-1 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={handleTransaction}
+                    className={`flex-1 py-3 rounded-xl font-bold text-zinc-950 transition-all ${txData.type === 'IN' ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-red-500 hover:bg-red-400 text-white'}`}
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </AnimatePresence>
     </div>
   );

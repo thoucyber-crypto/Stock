@@ -1,20 +1,61 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Inventory Management System
 
-# Run and deploy your AI Studio app
+A full-stack inventory management system with AI-powered product image generation and real-time stock tracking.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/d62d5726-b09c-444a-870a-bca050e5e611
+- **Real-time Inventory Tracking**: Monitor stock levels, categories, and transactions.
+- **AI Image Generation**: Generate professional product images using Google Gemini.
+- **Role-Based Access Control**: Manage permissions for Owners, Admins, Users, and Viewers.
+- **Stock Movement Confirmation**: Prevent accidental changes with a confirmation dialog for stock IN/OUT operations.
+- **CSV Import/Export**: Easily manage large datasets.
+- **Interactive Dashboard**: Visual insights into stock levels and recent activities.
 
-## Run Locally
+## Getting Started
 
-**Prerequisites:**  Node.js
+### Prerequisites
 
+- Node.js (v18 or higher)
+- npm
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+### Installation
+
+1. Clone the repository.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+### Configuration
+
+1. Create a `.env` file in the root directory based on `.env.example`.
+2. Add your Google Gemini API Key:
+   ```env
+   GEMINI_API_KEY=your_api_key_here
+   ```
+3. Ensure you have a `firebase-applet-config.json` file in the root directory with your Firebase project configuration.
+
+### Running the Application
+
+#### Development Mode
+
+Starts the server with Vite middleware for hot module replacement:
+```bash
+npm run dev
+```
+
+#### Production Mode
+
+Build the frontend and start the production server:
+```bash
+npm run build
+npm start
+```
+
+## Deployment
+
+This application is designed to be deployed to containerized environments like Google Cloud Run. Ensure that the `GEMINI_API_KEY` and Firebase configuration are correctly set in your deployment environment.
+
+## License
+
+MIT
