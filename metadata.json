@@ -1,0 +1,5 @@
+{
+  "name": "StockMaster Pro",
+  "description": "A professional inventory and stock management system for companies, featuring real-time tracking, low stock alerts, and transaction history.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "Category": {
+      "title": "Category",
+      "description": "Product categories for organization.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the category" },
+        "description": { "type": "string", "description": "Brief description of the category" }
+      },
+      "required": ["name"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Items in the inventory.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Product name" },
+        "categoryId": { "type": "string", "description": "ID of the category" },
+        "sku": { "type": "string", "description": "Stock Keeping Unit" },
+        "price": { "type": "number", "description": "Unit price" },
+        "quantity": { "type": "number", "description": "Current stock quantity" },
+        "minStockLevel": { "type": "number", "description": "Minimum quantity before alert" },
+        "unit": { "type": "string", "description": "Measurement unit (e.g., pcs, kg)" },
+        "imageUrl": { "type": "string", "description": "URL or base64 data of the product image" },
+        "lastUpdated": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["name", "categoryId", "sku", "price", "quantity"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Stock movement records (In/Out).",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "description": "ID of the product" },
+        "type": { "type": "string", "enum": ["IN", "OUT"], "description": "Transaction type" },
+        "quantity": { "type": "number", "description": "Quantity moved" },
+        "date": { "type": "string", "format": "date-time", "description": "Transaction date" },
+        "notes": { "type": "string", "description": "Optional notes" },
+        "userId": { "type": "string", "description": "ID of the user who performed the transaction" }
+      },
+      "required": ["productId", "type", "quantity", "date", "userId"]
+    }
+  },
+  "firestore": {
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Collection of product categories"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of inventory products"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Collection of stock movement history"
+    }
+  }
+}

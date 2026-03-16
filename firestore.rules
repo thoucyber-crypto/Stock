@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: categories
+    // Fields:
+    //   - name: string (required)
+    //   - description: string (optional)
+    //
+    // Collection: products
+    // Fields:
+    //   - name: string (required)
+    //   - categoryId: string (required)
+    //   - sku: string (required)
+    //   - price: number (required)
+    //   - quantity: number (required)
+    //   - minStockLevel: number (optional)
+    //   - unit: string (optional)
+    //   - lastUpdated: timestamp (optional)
+    //
+    // Collection: transactions
+    // Fields:
+    //   - productId: string (required)
+    //   - type: string (IN/OUT) (required)
+    //   - quantity: number (required)
+    //   - date: timestamp (required)
+    //   - notes: string (optional)
+    //   - userId: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "thou.cyber@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['name']) &&
+        data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+        (!('description' in data) || (data.description is string && data.description.size() < 500));
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['name', 'categoryId', 'sku', 'price', 'quantity']) &&
+        data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+        data.categoryId is string &&
+        data.sku is string && data.sku.size() > 0 &&
+        data.price is number && data.price >= 0 &&
+        data.quantity is number &&
+        (!('minStockLevel' in data) || (data.minStockLevel is number && data.minStockLevel >= 0)) &&
+        (!('unit' in data) || (data.unit is string && data.unit.size() < 50)) &&
+        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() < 2000000)); // Allow large strings for base64
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['productId', 'type', 'quantity', 'date', 'userId']) &&
+        data.productId is string &&
+        data.type in ['IN', 'OUT'] &&
+        data.quantity is number && data.quantity > 0 &&
+        data.date is timestamp &&
+        data.userId == request.auth.uid;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    match /categories/{categoryId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidCategory(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() && isValidProduct(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && isValidTransaction(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+  }
+}
